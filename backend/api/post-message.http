@@ -1,0 +1,7 @@
+POST http://localhost:8080/api/rooms/0d66e9d3-aabb-46ad-b799-00bc4cfcbf7f/messages HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
+
+{ 
+    "message": "this is test message" 
+}
