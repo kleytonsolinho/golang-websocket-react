@@ -1,0 +1,3 @@
+DELETE http://localhost:8080/api/rooms/0d66e9d3-aabb-46ad-b799-00bc4cfcbf7f/messages/6fc75b87-06af-4611-b6c0-b4005ed5c093/react HTTP/1.1
+Host: localhost:8080
+Content-Type: application/json
