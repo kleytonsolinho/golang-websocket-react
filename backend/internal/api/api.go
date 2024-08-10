@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -182,7 +183,36 @@ func (h apiHandler) notifyClients(msg Message) {
 	}
 }
 
-func (h apiHandler) handleGetRooms(w http.ResponseWriter, r *http.Request) {}
+func (h apiHandler) handleGetRooms(w http.ResponseWriter, r *http.Request) {
+	rooms, err := h.q.GetRooms(r.Context())
+	if err != nil {
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type roomResponse struct {
+		ID        string `json:"id"`
+		Theme     string `json:"theme"`
+		CreatedAt string `json:"created_at"`
+	}
+
+	type response struct {
+		Rooms []roomResponse `json:"rooms"`
+	}
+
+	var roomResponses []roomResponse
+	for _, room := range rooms {
+		roomResponses = append(roomResponses, roomResponse{
+			ID:        room.ID.String(),
+			Theme:     room.Theme,
+			CreatedAt: room.CreatedAt.Time.Format(time.RFC3339),
+		})
+	}
+
+	data, _ := json.Marshal(response{Rooms: roomResponses})
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
 
 func (h apiHandler) handleCreateRoomMessages(w http.ResponseWriter, r *http.Request) {
 	rawRoomID := chi.URLParam(r, "room_id")
@@ -240,8 +270,182 @@ func (h apiHandler) handleCreateRoomMessages(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func (h apiHandler) handleGetRoomMessages(w http.ResponseWriter, r *http.Request)        {}
-func (h apiHandler) handleGetRoomMessage(w http.ResponseWriter, r *http.Request)         {}
-func (h apiHandler) handleReactToMessage(w http.ResponseWriter, r *http.Request)         {}
-func (h apiHandler) handleRemoveReactFromMessage(w http.ResponseWriter, r *http.Request) {}
-func (h apiHandler) handleMarkMessageAsAnswered(w http.ResponseWriter, r *http.Request)  {}
+func (h apiHandler) handleGetRoomMessages(w http.ResponseWriter, r *http.Request) {
+	rawRoomID := chi.URLParam(r, "room_id")
+	roomID, err := uuid.Parse(rawRoomID)
+	if err != nil {
+		http.Error(w, "invalid room id", http.StatusBadRequest)
+		return
+	}
+
+	messages, err := h.q.GetMessages(r.Context(), roomID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "room not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type messageResponse struct {
+		ID            string `json:"id"`
+		Message       string `json:"message"`
+		ReactionCount int64  `json:"reaction_count"`
+		Answered      bool   `json:"answered"`
+		CreatedAt     string `json:"created_at"`
+	}
+
+	type response struct {
+		ID       string            `json:"room_id"`
+		Messages []messageResponse `json:"messages"`
+	}
+
+	var messageResponses []messageResponse
+	for _, msg := range messages {
+		messageResponses = append(messageResponses, messageResponse{
+			ID:            msg.ID.String(),
+			Message:       msg.Message,
+			ReactionCount: msg.ReactionCount,
+			Answered:      msg.Answered,
+			CreatedAt:     msg.CreatedAt.Time.Format(time.RFC3339),
+		})
+	}
+
+	data, err := json.Marshal(response{ID: roomID.String(), Messages: messageResponses})
+	if err != nil {
+		slog.Error("failed to marshal response", "error", err)
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
+
+func (h apiHandler) handleGetRoomMessage(w http.ResponseWriter, r *http.Request) {
+	rawMessageID := chi.URLParam(r, "message_id")
+	messageID, err := uuid.Parse(rawMessageID)
+	if err != nil {
+		http.Error(w, "invalid message id", http.StatusBadRequest)
+		return
+	}
+
+	msg, err := h.q.GetMessage(r.Context(), messageID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "message not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type response struct {
+		ID            string `json:"id"`
+		Message       string `json:"message"`
+		ReactionCount int64  `json:"reaction_count"`
+		Answered      bool   `json:"answered"`
+		CreatedAt     string `json:"created_at"`
+	}
+
+	data, _ := json.Marshal(response{
+		ID:            msg.ID.String(),
+		Message:       msg.Message,
+		ReactionCount: msg.ReactionCount,
+		Answered:      msg.Answered,
+		CreatedAt:     msg.CreatedAt.Time.Format(time.RFC3339),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
+
+func (h apiHandler) handleReactToMessage(w http.ResponseWriter, r *http.Request) {
+	rawMessageID := chi.URLParam(r, "message_id")
+	messageID, err := uuid.Parse(rawMessageID)
+	if err != nil {
+		http.Error(w, "invalid message id", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.q.ReactToMessage(r.Context(), messageID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "message not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type response struct {
+		ID string `json:"id"`
+	}
+
+	data, _ := json.Marshal(response{
+		ID: messageID.String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
+
+func (h apiHandler) handleRemoveReactFromMessage(w http.ResponseWriter, r *http.Request) {
+	rawMessageID := chi.URLParam(r, "message_id")
+	messageID, err := uuid.Parse(rawMessageID)
+	if err != nil {
+		http.Error(w, "invalid message id", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.q.RemoveReactionFromMessage(r.Context(), messageID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "message not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type response struct {
+		ID string `json:"id"`
+	}
+
+	data, _ := json.Marshal(response{
+		ID: messageID.String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
+
+func (h apiHandler) handleMarkMessageAsAnswered(w http.ResponseWriter, r *http.Request) {
+	rawMessageID := chi.URLParam(r, "message_id")
+	messageID, err := uuid.Parse(rawMessageID)
+	if err != nil {
+		http.Error(w, "invalid message id", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.q.MarkMessageAsAnswered(r.Context(), messageID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "message not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "something went wrong", http.StatusInternalServerError)
+		return
+	}
+
+	type response struct {
+		ID string `json:"id"`
+	}
+
+	data, _ := json.Marshal(response{
+		ID: messageID.String(),
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
